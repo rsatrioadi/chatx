@@ -1,13 +1,13 @@
 import streamlit as st
 from constants import search_number_messages
 from langchain_utils import initialize_chat_conversation
-from search_indexing import download_and_index_file, load_faiss_index
+from search_indexing import download_and_index_file
 import re
 
 
 def remove_file(file_to_remove):
     """
-    Remove file from the session_state. Triggered by the respective button.
+    Remove file from the session_state. Triggered by the respective button
     """
     if file_to_remove in st.session_state.uploaded_files:
         st.session_state.uploaded_files.remove(file_to_remove)
@@ -17,18 +17,20 @@ def remove_file(file_to_remove):
 st.set_page_config(page_title='Talk with files using LLMs - Beta')
 st.title('Talk with files using LLMs - (Beta)')
 
-# Initialize the faiss_index key in the session state
+
+# Initialize the faiss_index key in the session state. This can be used to avoid having to download and embed the same file
+# every time the user asks a question
 if 'faiss_index' not in st.session_state:
     st.session_state['faiss_index'] = {
         'indexed_files': [],
-        'index': load_faiss_index()
+        'index': None
     }
 
 # Initialize conversation memory used by Langchain
 if 'conversation_memory' not in st.session_state:
     st.session_state['conversation_memory'] = None
 
-# Initialize chat history used by Streamlit (for display purposes)
+# Initialize chat history used by StreamLit (for display purposes)
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -93,3 +95,4 @@ if query_text := st.chat_input("Your message"):
                 st.markdown(snippet)
 
     st.session_state.messages.append({"role": "assistant", "content": response})
+    

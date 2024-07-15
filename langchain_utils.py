@@ -9,23 +9,29 @@ from search_indexing import search_faiss_index
 
 class SnippetsBufferWindowMemory(ConversationBufferWindowMemory):
     """
-    MemoryBuffer used to hold the document snippets. Inherits from ConversationBufferWindowMemory.
+    MemoryBuffer used to hold the document snippets. Inherits from ConversationBufferWindowMemory, and overwrites the
+    load_memory_variables method
     """
 
-    def __init__(self, index: FAISS, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.index = index
-        self.pages = []
-        self.snippets = []
+    index: FAISS = None
+    pages: list = []
+    memory_key = 'snippets'
+    snippets: list = []
 
-    def load_memory_variables(self, inputs: dict) -> dict:
+    def __init__(self, *args, **kwargs):
+        ConversationBufferWindowMemory.__init__(self, *args, **kwargs)
+        self.index = kwargs['index']
+
+    def load_memory_variables(self, inputs) -> dict:
         """
-        Based on user inputs, search the index and add similar snippets to memory.
+        Based on the user inputs, search the index and add the similar snippets to memory (but only if they aren't in the
+        memory already)
         """
         similar_snippets = search_faiss_index(self.index, inputs['user_messages_history'])
-
-        self.snippets.reverse()
-        self.pages.reverse()
+        # In order to respect the buffer size and make its pruning work, need to reverse the list, and then un-reverse it later
+        # This way, the most relevant snippets are kept at the start of the list
+        self.snippets = [snippet for snippet in reversed(self.snippets)]
+        self.pages = [page for page in reversed(self.pages)]
 
         for snippet in similar_snippets:
             page_number = snippet.metadata['page']
@@ -41,23 +47,39 @@ class SnippetsBufferWindowMemory(ConversationBufferWindowMemory):
                 self.pages.append(page_number)
                 self.snippets.append(snippet_to_add)
 
-        self.snippets.reverse()
-        self.pages.reverse()
-        self.snippets = self.snippets[:self.k]
-        self.pages = self.pages[:self.k]
+        # Reverse list of snippets and pages, in order to keep the most relevant at the top
+        # Also prune the list to keep the buffer within the define size (k)
+        self.snippets = [snippet for snippet in reversed(self.snippets)][:self.k]
+        self.pages = [page for page in reversed(self.pages)][:self.k]
+        to_return = ''.join(self.snippets)
 
-        return {'snippets': ''.join(self.snippets)}
+        return {'snippets': to_return}
 
 
-def construct_conversation(prompt: str, llm, memory: CombinedMemory) -> ConversationChain:
+def construct_conversation(prompt: str, llm, memory) -> ConversationChain:
     """
-    Construct a ConversationChain object.
+    Construct a ConversationChain object
     """
-    prompt_template = PromptTemplate.from_template(template=prompt)
-    return ConversationChain(llm=llm, memory=memory, verbose=False, prompt=prompt_template)
+
+    prompt = PromptTemplate.from_template(
+        template=prompt,
+    )
+
+    conversation = ConversationChain(
+        llm=llm,
+        memory=memory,
+        verbose=False,
+        prompt=prompt
+    )
+
+    return conversation
 
 
-def initialize_chat_conversation(index: FAISS, model_to_use: str = llm_model_to_use, max_tokens: int = llm_max_tokens) -> ConversationChain:
+def initialize_chat_conversation(
+        index: FAISS, 
+        model_to_use: str = llm_model_to_use, 
+        max_tokens: int = llm_max_tokens
+    ) -> ConversationChain:
     """
     Initialize a chat conversation using the provided FAISS index and model.
     """
@@ -69,7 +91,7 @@ def initialize_chat_conversation(index: FAISS, model_to_use: str = llm_model_to_
     Always include the title and page number of the document where the information was found, if applicable. [/INST] </s> 
     [INST] {history} 
     Question: {input} 
-    Snippets: {snippets} 
+    Relevant Snippets: {snippets} 
     Answer: [/INST]
     """
 
