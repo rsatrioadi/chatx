@@ -1,38 +1,64 @@
+from typing import List
 from langchain import FAISS
-from langchain.document_loaders import PyPDFium2Loader
-from langchain.embeddings import OpenAIEmbeddings
-from langchain.text_splitter import CharacterTextSplitter
-import pypdfium2 as pdfium
 from constants import chunk_size, chunk_overlap, number_snippets_to_retrieve
+from langchain_community.document_loaders import UnstructuredFileLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.embeddings import SentenceTransformerEmbeddings
+from langchain_community.vectorstores.utils import filter_complex_metadata
+import streamlit as st
+import os
+import tempfile
+
+FAISS_INDEX_PATH = "faiss_index"
 
 
-def download_and_index_pdf(urls: list[str]) -> FAISS:
+def download_and_index_file(files: List[st.runtime.uploaded_file_mgr.UploadedFile]) -> FAISS:
     """
-    Download and index a list of PDFs based on the URLs
+    Process and index a list of uploaded files, then save the index to disk.
+
+    Args:
+        files (List[st.uploaded_file_manager.UploadedFile]): List of uploaded files.
+
+    Returns:
+        FAISS: The FAISS index created from the processed files.
     """
-
-    def __update_metadata(pages, url):
-        """
-        Add to the document metadata the title and original URL
-        """
-        for page in pages:
-            pdf = pdfium.PdfDocument(page.metadata['source'])
-            title = pdf.get_metadata_dict().get('Title', url)
-            page.metadata['source'] = url
-            page.metadata['title'] = title
-        return pages
-
     all_pages = []
-    for url in urls:
-        loader = PyPDFium2Loader(url)
-        splitter = CharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-        pages = loader.load_and_split(splitter)
-        pages = __update_metadata(pages, url)
-        all_pages += pages
 
-    faiss_index = FAISS.from_documents(all_pages, OpenAIEmbeddings())
+    for uploaded_file in files:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[-1]) as temp_file:
+            temp_file.write(uploaded_file.getbuffer())
+            temp_file_path = temp_file.name
 
+        try:
+            loader = UnstructuredFileLoader(temp_file_path)
+            splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+            pages = loader.load_and_split(splitter)
+            pages = filter_complex_metadata(pages)
+
+            for i, page in enumerate(pages):
+                page.metadata['page'] = i
+                page.metadata['url'] = uploaded_file.name
+                page.metadata['title'] = uploaded_file.name
+
+            all_pages.extend(pages)
+        finally:
+            os.remove(temp_file_path)
+
+    faiss_index = FAISS.from_documents(all_pages, SentenceTransformerEmbeddings())
+    faiss_index.save_local(FAISS_INDEX_PATH)
     return faiss_index
+
+
+def load_faiss_index() -> FAISS:
+    """
+    Load the FAISS index from disk.
+
+    Returns:
+        FAISS: The loaded FAISS index.
+    """
+    if os.path.exists(FAISS_INDEX_PATH):
+        return FAISS.load_local(FAISS_INDEX_PATH, SentenceTransformerEmbeddings())
+    return None
 
 
 def search_faiss_index(faiss_index: FAISS, query: str, top_k: int = number_snippets_to_retrieve) -> list:
